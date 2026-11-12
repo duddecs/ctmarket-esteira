@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8865:8865"
+    environment:
+      PORTA: "8865"
+  banco:
+    image: postgres:11
+    environment:
+      POSTGRES_USER: market
+      POSTGRES_PASSWORD: SApc7LBjZcG2sVdj5pwI1fHI
