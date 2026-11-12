@@ -1,0 +1,121 @@
+name: GS 564771 - DevSecOps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build
+        run: echo "build"
+
+  sast:
+    needs: build
+    runs-on: ubuntu-latest
+    container: returntocorp/semgrep:latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Semgrep
+        run: semgrep --config=p/security-audit --config=p/owasp-top-ten --config=p/cwe-top-25 --error --json -o semgrep.json .
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45bf47
+        with:
+          name: sast-report
+          path: semgrep.json
+
+  segredos:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@83373df2f9578ebc64fc2ddf7616baff28bcd5f1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45bf47
+        with:
+          name: segredos-report
+          path: gitleaks-report.*
+
+  sca:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Trivy FS
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          scan-type: fs
+          format: json
+          output: trivy-sca.json
+          exit-code: 1
+          severity: HIGH,CRITICAL
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45bf47
+        with:
+          name: sca-report
+          path: trivy-sca.json
+
+  testes:
+    needs: [build, sca]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Testes
+        run: echo "rodar testes"
+
+  build-image-scan:
+    needs: [sast, segredos, sca, testes]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build image
+        run: docker build -t ctmarket:test .
+      - name: Trivy image
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          image-ref: ctmarket:test
+          format: json
+          output: trivy-image.json
+          exit-code: 1
+          severity: HIGH,CRITICAL
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45bf47
+        with:
+          name: image-report
+          path: trivy-image.json
+
+  dast:
+    needs: build-image-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Start app
+        run: docker run -d -p 8865:8865 --name ctmarket ctmarket:test
+      - name: Wait
+        run: sleep 10
+      - name: ZAP full scan
+        uses: zaproxy/action-full-scan@f20e22f6e916341861a26ca0612860f07cbc0b10
+        with:
+          target: http://localhost:8865
+          allow_issue_writing: false
+          cmd_options: -J zap-dast.json
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45bf47
+        with:
+          name: dast-report
+          path: zap-dast.json
+
+  deploy:
+    needs: [build, sast, segredos, sca, testes, build-image-scan, dast]
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Deploy
+        run: echo "deploy aqui"
